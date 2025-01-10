@@ -1,0 +1,139 @@
+conda env list
+conda activate unitvelo-gpu
+
+###################################################################
+#################### using UniTVelo no decontx ####################
+###################################################################
+import scvelo as scv
+import unitvelo as utv
+import numpy as np
+
+path = "/home/qianyu/Desktop/grid/snRNAseq_all_nuclei_V1/figures/pairwise2_L2346_velocity/"
+cond = "ExcL23_All"
+
+##################################################################
+############################ UniTVelo ############################
+##################################################################
+
+#https://github.com/StatBiomed/UniTVelo/blob/main/unitvelo/config.py
+velo_config = utv.config.Configuration()
+velo_config.N_NEIGHBORS = 100
+velo_config.IROOT = None
+
+label = 'condition_simpl'
+exp_metrics = {}
+cluster_edges = [("Exc L23")]
+
+
+
+adata = scv.read("/home/qianyu/Desktop/grid/snRNAseq_all_nuclei_V1/output/step3_ExcL23_NoDecontX.h5ad", cache=True)
+
+import pandas as pd
+adata.obs['condition_simpl'] = pd.Categorical(
+    adata.obs['condition_simpl'],
+    categories=["NR", "LDR", "LDR30m", "LDR2h", "LDR4h", "LDR6h"],
+    ordered=True
+)
+
+
+# Validate the conversion
+print(adata.obs['condition_simpl'].dtype)  # Should print 'category'
+print(adata.obs['condition_simpl'].cat.categories)  # Should list the ordered categories
+
+# for fixing the error: ValueError: '_index' is a reserved name for dataframe columns.
+adata.__dict__['_raw'].__dict__['_var'] = adata.__dict__['_raw'].__dict__['_var'].rename(columns={'_index': 'features'})
+
+
+
+# Calculate 50% of the cells
+n_cells = adata.n_obs
+n_downsample = int(n_cells * 0.5)
+
+# Randomly select indices for downsampling
+np.random.seed(42)  # Set a seed for reproducibility
+selected_indices = np.random.choice(adata.obs.index, n_downsample, replace=False)
+
+# Subset the adata object to include only the selected cells
+tdata = adata[selected_indices, :].copy()
+
+# Validate the result
+print(f"Original number of cells: {n_cells}")
+print(f"Number of cells after downsampling: {tdata.n_obs}")
+
+
+
+tdata = utv.run_model(tdata, label, config_file=velo_config)
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+unique_labels = tdata.obs['condition_simpl'].unique().tolist()
+colors = plt.cm.tab20(np.linspace(0, 1, len(unique_labels)))
+
+tdata.uns['spec_Celltype_colors'] = dict(zip(unique_labels, colors))
+scv.pl.velocity_embedding_stream(tdata, color='condition_simpl', dpi=200, title='', legend_loc='right margin')
+scv.pl.velocity_embedding_stream(tdata, color='condition_simpl', dpi=200, title='', legend_loc='right margin', save = path + cond + "_embedding.pdf")
+scv.pl.velocity_embedding_stream(tdata, color='condition_simpl', dpi=200, title='', legend_loc='right margin', save = path + cond + "_embedding.svg")
+# scv.pl.velocity_embedding(tdata, arrow_length=3, arrow_size=1, dpi=200, color='condition_simpl')
+
+
+
+adata = tdata
+
+#### gene level
+scv.tl.latent_time(adata, min_likelihood=None)
+scv.pl.scatter(adata, color='latent_time', color_map='gnuplot', size=20, dpi=100,save = path + cond + "_scatter.pdf")
+
+subvar = adata.var.loc[adata.var['velocity_genes'] == True]
+sub = adata[:, subvar.index]
+
+
+
+
+subvar = adata.var.loc[adata.var['velocity_genes'] == True]
+sub = adata[:, subvar.index]
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.displot(sub.var['fit_t'].values, kde=True, bins=20)
+plt.savefig(path + cond + "_fit.png")
+plt.show()
+
+genes = sub.var.loc[sub.var['fit_t'] < 0].index # repression
+# sorted_genes = sub.var.sort_values(by='fit_t').head(50)
+# genes = sorted_genes.index
+scv.pl.heatmap(
+    adata, var_names=genes, sortby='latent_time', yticklabels=True,
+    col_color=label, n_convolve=len(genes),figsize=(8,4/30*len(genes)),save=path + cond + "_repression.pdf")
+# Filter the DataFrame
+filtered_data = sub.var[sub.var['fit_t'] < 0][['fit_t']]
+# Export to a CSV file
+filtered_data.to_csv(path + cond +'_repression.csv', sep='\t', index=True)
+
+
+
+
+genes = sub.var.loc[sub.var['fit_t'] > 0].index # induction
+# sorted_genes = sub.var.sort_values(by='fit_t', ascending=False).head(50)
+# genes = sorted_genes.index
+
+scv.pl.heatmap(
+    adata, var_names=genes, sortby='latent_time', yticklabels=True,
+    col_color=label, n_convolve=len(genes),figsize=(8,4/30*len(genes)),save=path + cond + "_induction.pdf")
+# Filter the DataFrame
+filtered_data = sub.var[sub.var['fit_t'] > 0][['fit_t']]
+# Export to a CSV file
+filtered_data.to_csv(path + cond +'_induction.csv', sep='\t', index=True)
+
+
+
+
+
+# Save the modified AnnData object
+output_path = "/home/qianyu/Desktop/step3_ExcL23_Modified.h5ad"
+adata.write(output_path)
+output_path = "/home/qianyu/Desktop/grid/snRNAseq_all_nuclei_V1/output/step3_ExcL23_Modified.h5ad"
+adata.write(output_path)
+
+
